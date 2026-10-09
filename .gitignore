@@ -1,0 +1,19 @@
+# Godot
+.godot/
+export_presets.cfg
+*.translation
+
+# Sistema / ferramentas
+node_modules/
+.DS_Store
+Thumbs.db
+*.log
+
+# Imagens de REFERÊNCIA de terceiros usadas só como estudo durante o
+# desenvolvimento. Nunca versionar nem redistribuir: o repositório contém
+# apenas arte original deste projeto.
+.scratch/*.jpg
+.scratch/*.jpeg
+.scratch/*.webp
+.scratch/**/reference*
+.scratch/**/*-reference.*

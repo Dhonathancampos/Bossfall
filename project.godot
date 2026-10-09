@@ -1,0 +1,20 @@
+; Dauntless Lite — Onda 1
+
+config_version=5
+
+[application]
+
+config/name="Dauntless Lite"
+run/main_scene="res://src/game/app.tscn"
+config/features=PackedStringArray("4.4", "Forward Plus")
+
+[display]
+
+window/size/viewport_width=1600
+window/size/viewport_height=900
+window/stretch/mode="canvas_items"
+
+[rendering]
+
+anti_aliasing/quality/msaa_2d=2
+environment/defaults/default_clear_color=Color(0.043, 0.055, 0.071, 1)
