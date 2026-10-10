@@ -4,6 +4,12 @@
 Convenção das armas: punho na origem, lâmina apontando +Z (que vira +Y na
 Godot). Sem rig — a HunterView prende o .glb num BoneAttachment3D da mão.
 
+Escala: ~0,95 m do punho à ponta. A primeira versão tinha 1,20 m e lâmina de
+22 cm de largura; nas capturas dos Golpes ela cruzava o corpo inteiro do
+Caçador e TAPAVA a silhueta em metade dos arcos (pendência registrada no
+ANIMACAO.md, item 5). Encurtar e afinar resolve sem perder o exagero: a
+guarda continua desproporcional, que é o que diz "cartunesco".
+
 Rodar:  blender --background --python tools/models/weapon_sword.py
 """
 
@@ -27,12 +33,12 @@ def build() -> None:
     gold = common.material("wpn_gold", "e0a85a")
 
     # Peças sobrepostas: lâmina entra na guarda, ponta entra na lâmina.
-    common.box("grip", (0.09, 0.09, 0.3), (0.0, 0.0, -0.1), grip)
-    common.sphere("pommel", 0.08, (0.0, 0.0, -0.26), gold, subdivisions=1)
-    common.box("guard", (0.16, 0.44, 0.1), (0.0, 0.0, 0.06), gold)
-    common.box("blade", (0.06, 0.22, 0.95), (0.0, 0.0, 0.5), steel)
-    common.box("ridge", (0.07, 0.07, 0.86), (0.0, 0.0, 0.48), steel_dark)
-    common.cone("tip", 0.12, 0.24, (0.0, 0.0, 1.05), steel, vertices=4)
+    common.box("grip", (0.085, 0.085, 0.26), (0.0, 0.0, -0.09), grip)
+    common.sphere("pommel", 0.075, (0.0, 0.0, -0.23), gold, subdivisions=1)
+    common.box("guard", (0.14, 0.38, 0.09), (0.0, 0.0, 0.05), gold)
+    common.box("blade", (0.05, 0.17, 0.72), (0.0, 0.0, 0.42), steel)
+    common.box("ridge", (0.06, 0.055, 0.66), (0.0, 0.0, 0.41), steel_dark)
+    common.cone("tip", 0.095, 0.20, (0.0, 0.0, 0.86), steel, vertices=4)
 
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     common.export_glb(os.path.abspath(OUT))

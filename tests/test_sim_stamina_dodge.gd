@@ -6,6 +6,17 @@ const HUNTER: int = 1
 const SECOND: int = SimConfig.TICK_RATE
 
 
+## REESCRITO no ticket 14.
+##
+## Antes o teste cobrava "o combo leve passa por TODOS os Golpes da lista
+## leve". Com o grafo, a lista leve também guarda nós que só existem em outros
+## contextos (corrida, pós-esquiva) e nós de desvio — martelar o botão leve
+## nunca deveria alcançá-los. A cobrança fica MAIS específica, não mais frouxa:
+## a cadeia que o grafo DECLARA saindo de `entry.free` por `light` tem que ser
+## percorrida inteira, na ordem, e de graça.
+##
+## Repetidoras aparecem com cadeia vazia de propósito: o leve delas é um tiro,
+## não um Golpe (ver test_sim_repeaters.gd).
 func test_light_combos_are_free_even_with_zero_stamina(t: TestCase) -> void:
 	for weapon in Weapons.ids():
 		var hunter := HunterState.new()
@@ -13,19 +24,46 @@ func test_light_combos_are_free_even_with_zero_stamina(t: TestCase) -> void:
 		hunter.stamina = 0.0
 		# Bloqueia apenas a regeneração para provar que não depende dela.
 		hunter.regen_delay = 100.0
-		var seen: Array[int] = []
+		var seen: Array[String] = []
 		var input := HunterInput.new()
 		input.light = true
 		for tick in SECOND * 5:
 			HunterStep.step(hunter, input, SimConfig.TICK_DELTA)
-			if hunter.state == HunterState.State.ATTACK and hunter.attack_index not in seen:
-				seen.append(hunter.attack_index)
+			var node := hunter.current_node()
+			if hunter.state == HunterState.State.ATTACK and not node.is_empty() and node not in seen:
+				seen.append(node)
 			t.check_approx(hunter.stamina, 0.0, weapon + " não exige vigor para leves")
-		t.check_eq(seen.size(), Weapons.moves(weapon, Weapons.Kind.LIGHT).size(), weapon + " completa combo sem vigor")
+		t.check_eq(seen, _light_chain(weapon), weapon + " percorre a cadeia leve declarada sem vigor")
 
 
+## A cadeia leve declarada pelo grafo: entra por `entry.free` com `light` e
+## segue as arestas `light` incondicionais até repetir um nó.
+func _light_chain(weapon: String) -> Array[String]:
+	var graph := Weapons.combo_graph(weapon)
+	var chain: Array[String] = []
+	var current := _light_edge(graph["entry"].get("free", []))
+	while not current.is_empty() and not current.begins_with("@") and current not in chain:
+		chain.append(current)
+		current = _light_edge(graph["nodes"].get(current, {}).get("next", []))
+	return chain
+
+
+func _light_edge(candidates: Array) -> String:
+	for candidate in candidates:
+		var edge: Dictionary = candidate
+		if String(edge.get("input", "")) == "light" and String(edge.get("if", "")).is_empty():
+			return String(edge.get("to", ""))
+	return ""
+
+
+## REESCRITO no ticket 14: o Machado sai da varredura porque o leve dele é
+## CARREGÁVEL — segurar o Preparo drena vigor de propósito (exceção declarada
+## no MEMORY.md, coberta por test_sim_axe.gd). Para as outras cinco armas a
+## regra continua idêntica: martelar o leve regenera igual ao repouso.
 func test_light_spam_preserves_regeneration_and_its_delay(t: TestCase) -> void:
 	for weapon in Weapons.ids():
+		if weapon == Weapons.AXE:
+			continue
 		var attacking := HunterState.new()
 		attacking.weapon_id = weapon
 		var resting := HunterState.new()

@@ -66,7 +66,6 @@ const DOWNED_REVIVE_FRACTION: float = 0.5
 ## Tipos de Dano contra Partes. Corte decepa; Impacto quebra o que é duro.
 const SLASH_SEVER_MULT: float = 1.4
 const BLUNT_HARD_MULT: float = 1.35
-const PIERCE_WOUND_MULT: float = 1.0  # Reservado: Ferimento chega com a Lança.
 
 ## Uma Parte quebrada recebe mais dano dali em diante.
 const BROKEN_PART_MULT: float = 1.5
@@ -77,6 +76,7 @@ const STAGGER_TYPE_MULT: Dictionary = {
 	Weapons.DamageType.SLASH: 0.6,
 	Weapons.DamageType.BLUNT: 2.2,
 	Weapons.DamageType.PIERCE: 0.5,
+	Weapons.DamageType.BALLISTIC: 0.4,
 }
 
 ## Atordoamento: o medidor esvazia sozinho, derruba quando enche, e cada
@@ -110,6 +110,69 @@ const MOMENTUM_MAX_PIPS: int = 3
 const CHAIN_SLAM_RANGE: float = 40.0
 const CHAIN_SLAM_DAMAGE_PER_PIP: float = 25.0
 const CHAIN_SLAM_STAGGER_PER_PIP: float = 20.0
+
+## Grafo de combo (ticket 14) -------------------------------------------------
+
+## Contexto `sprint` do grafo: a velocidade a partir da qual o Caçador conta
+## como "saindo da corrida". Derivada de `velocity`, que já é replicada —
+## nenhum campo novo viaja no Instantâneo por causa disso.
+const COMBO_SPRINT_SPEED_MIN: float = HUNTER_SPRINT_SPEED * 0.9
+
+## Contexto `dodge` do grafo: quanto tempo depois do fim do rolamento (ou do
+## Rolinho) as entradas pós-esquiva ainda respondem.
+const COMBO_DODGE_WINDOW: float = 0.25
+
+## Espada: Brio. Fechar cadeias enche; os Golpes de desvio gastam 3.
+const BRIO_MAX: int = 6
+
+## Onda de Brio (segurar o pesado com Brio): projétil que pode interromper.
+const BRIO_WAVE_DAMAGE: float = 50.0
+const BRIO_WAVE_STAGGER: float = 160.0
+const BRIO_WAVE_SPEED: float = 820.0
+const BRIO_WAVE_RANGE: float = 620.0
+
+## Machado: carga por golpe. O multiplicador cresce linear até o teto em 1 s.
+const AXE_CHARGE_TIME_MAX: float = 1.0
+const AXE_CHARGE_MULT_MAX: float = 1.6
+## Carga parcial mínima para o acerto contar como "carregado" (gera Éter).
+const AXE_CHARGE_METER_MIN: float = 0.35
+## Segurar a carga drena vigor: é o custo do golpe canalizado. Toques
+## continuam gratuitos nos leves (decisão do MEMORY.md).
+const AXE_CHARGE_DRAIN_PER_SECOND: float = 10.0
+## Janela da carga PERFEITA (fração do tempo máximo) que concede Resolve.
+const AXE_CHARGE_PERFECT: Vector2 = Vector2(0.85, 1.0)
+
+## Determinação: pilhas ganhas ao apanhar o Voo da Ruína que conectou.
+## Mais pilhas = decaimento mais rápido.
+const DETERMINATION_MAX_STACKS: int = 3
+const DETERMINATION_DAMAGE_PER_STACK: float = 0.15
+const DETERMINATION_DURATIONS: Array[float] = [12.0, 9.0, 6.0]
+
+## Lança: Ferimento. Só Perfuração acumula; 133% do dano causado vira
+## Ferimento (fonte comunitária). Limiar e decaimento são nossos.
+const PIERCE_WOUND_RATE: float = 1.33
+const WOUND_THRESHOLD: float = 300.0
+const WOUND_DECAY_PER_SECOND: float = 10.0
+const WOUND_DURATION: float = 15.0
+## MODELO FIEL (rework 1.6.0): a Parte Ferida NÃO dá bônus de dano. Quem
+## explora a ferida — acumulando este tanto de dano nela enquanto está aberta
+## — ganha um buff PESSOAL por este tempo. Decisão registrada no MEMORY.md.
+const WOUND_HARVEST_TARGET: float = 1000.0
+const WOUND_BUFF_DURATION: float = 15.0
+const WOUND_BUFF_DAMAGE: float = 0.15
+
+## Repetidoras: pente e recarga. Empodera recarregando com a BORDA do corpo
+## do Behemoth a até esta distância (fiel à referência; sem janela de timing).
+const REPEATER_MAG: int = 12
+const REPEATER_RELOAD_TIME: float = 1.2
+const REPEATER_EMPOWER_RANGE: float = 160.0
+const REPEATER_EMPOWER_MULT: float = 1.25
+
+## Rolinho das Repetidoras: dash lateral curto com i-frames parciais.
+const TUMBLE_SPEED: float = 520.0
+const TUMBLE_DURATION: float = 0.18
+const TUMBLE_IFRAMES_END: float = 0.08
+const TUMBLE_RECOVERY: float = 0.10
 
 ## Espada: a Onda de Valor que cada Golpe conectado emite durante o buff.
 const VALOR_WAVE_DAMAGE: float = 12.0

@@ -29,9 +29,18 @@ enum State {
 	## Recarregando o Martelo. R de novo na janela certa encurta; na errada,
 	## trava mais tempo. (No fim do enum para não mudar os valores antigos.)
 	RELOADING,
+	## Segurando um Golpe carregável do Machado no Preparo: mira livre, corpo
+	## preso, vigor drenando. (No FIM do enum — os ints viajam no Instantâneo;
+	## aviso do REVIEW de 09/10 que não queremos repetir.)
+	AXE_CHARGE,
+	## Rolinho das Repetidoras: dash lateral curto com Invulnerabilidade
+	## parcial. (Também no FIM, depois de AXE_CHARGE.)
+	TUMBLE,
 }
 
-enum Buffered { NONE, LIGHT, HEAVY }
+## Os pedidos que ficam guardados durante um Golpe. `light_hold`/`heavy_hold`
+## entram como variantes porque o grafo distingue toque de segurada.
+enum Buffered { NONE, LIGHT, HEAVY, LIGHT_HOLD, HEAVY_HOLD, RELOAD }
 
 var id: int = 0
 var display_name: String = ""
@@ -85,12 +94,31 @@ var hit_ids: Array[int] = []
 ## responder sem exigir precisão de milissegundo.
 var buffered: Buffered = Buffered.NONE
 
-## Índice do próximo Golpe do mesmo tipo, se o Combo continuar.
-var combo_next: int = 0
+## De qual NÓ do grafo de combo o Caçador acabou de sair, no formato achatado
+## de `Weapons.flat_id`. -1 = nenhum: a próxima Entrada entra pelo `entry` da
+## arma. Estar no nó `l2` já É ter vindo de L,L — não há histórico guardado.
+var combo_from: int = -1
 
 ## Quanto tempo ainda dá para continuar o Combo. Zera e a sequência volta ao
-## primeiro Golpe.
+## começo do grafo. Só corre fora de um Golpe (fica congelada durante o
+## Gancho e a carga da Rajada — é o que os deixa encaixar no meio do combo).
 var combo_grace: float = 0.0
+
+## A transição-efeito (recarga encaixada do Martelo) já foi usada neste nó.
+## Sem isso, dava para farmar munição apertando R dentro da mesma janela.
+var combo_effect_used: bool = false
+
+## Espada: Brio. Pips ganhos fechando cadeias, gastos nos Golpes de desvio.
+var brio: int = 0
+
+## Janela do contexto `dodge` do grafo: corre depois do fim de um rolamento
+## (ou de um Rolinho) e é o que faz o "golpe pós-esquiva" existir.
+var dodge_window: float = 0.0
+
+## Nós de canal (Roda Viva, Ceifa Contínua, Broca): há quanto tempo o canal
+## se sustenta, e quantos pulsos já saíram (a Ceifa acelera por pulso).
+var channel_time: float = 0.0
+var channel_hits: int = 0
 
 ## Aflições: acúmulo por Elemento e tempo restante das ativas.
 ## {Elements.Element (int) -> float}
@@ -116,13 +144,57 @@ var valor_time: float = 0.0
 ## Para onde o Gancho puxa. Fixado no início do puxão.
 var hook_target: Vector2 = Vector2.ZERO
 
-## Relógio interno da Dança da Ceifadora: acumula até o próximo tick de acerto.
+## Relógio de pulsos: a Dança da Ceifadora e os Golpes multi-hit/canal
+## acumulam aqui até o próximo tick de acerto. Os estados são exclusivos,
+## então um relógio só serve aos dois.
 var spin_tick: float = 0.0
 
+## Machado: a carga em andamento, a carga travada no Golpe que saiu, e qual
+## botão está carregando.
+var charge_time: float = 0.0
+var charge_locked: float = 0.0
+var charge_kind: int = int(Weapons.Kind.LIGHT)
+
+## Machado: o machado foi arremessado e ainda não voltou. Enquanto verdadeiro
+## não há arma na mão (Golpes recusados); esquiva e movimento seguem livres.
+var axe_out: bool = false
+
+## Machado: pilhas de Determinação e o tempo restante da pilha corrente.
+var det_stacks: int = 0
+var det_time: float = 0.0
+
+## Resolve (Machado): enquanto maior que zero, o Caçador apanha o dano mas
+## não entra em HURT nem é empurrado. Super-armadura, não invulnerabilidade.
+var resolve_time: float = 0.0
+
+## Lança: nível (0..4) da munição convertida pela Conversão Aetérica.
+var pike_ammo: int = 0
+
+## Lança: tempo restante do buff pessoal ganho ao explorar uma Ferida.
+var wound_buff_time: float = 0.0
+
+## Repetidoras: pente, tiros empoderados restantes e a cadência.
+var mag: int = SimConfig.REPEATER_MAG
+var empowered_shots: int = 0
+var fire_cooldown: float = 0.0
+
+## Placar da Caçada, por Caçador: alimenta a tela de RESULTADO do lobby.
+var damage_dealt: float = 0.0
+var parts_broken: int = 0
+var interrupts: int = 0
+
+## Lobby: o Caçador declarou que está pronto.
+var ready: bool = false
+
 ## Flags de um Tique consumidas pela Sim (nunca viajam no Instantâneo):
-## o giro acertou neste Tique / o Especial pediu um projétil.
+## o giro/pulso acertou neste Tique, o pedido de projétil (por tipo), o tiro
+## das Repetidoras e os dois pedidos do Voo da Ruína.
 var spin_strike: bool = false
-var wants_projectile: bool = false
+var pending_projectile: String = ""
+var wants_shot: bool = false
+var wants_axe_recall: bool = false
+## A recarga das Repetidoras acabou de empoderar o pente (a Sim anuncia).
+var just_empowered: bool = false
 
 ## O Especial disparou neste Tique (a Sim anuncia o evento e apaga).
 var special_fired: bool = false
@@ -140,11 +212,23 @@ func current_move() -> Dictionary:
 	return Weapons.move(weapon_id, attack_kind as Weapons.Kind, attack_index)
 
 
+## O nó do grafo de combo em que este Golpe está, ou "" quando o Golpe não é
+## nó (Gancho, Rajada em carga, tiro, Rolinho).
+func current_node() -> String:
+	return Weapons.node_name(weapon_id, attack_kind as Weapons.Kind, attack_index)
+
+
 ## Verdadeiro só durante a fase Ativa, a única que acerta alguma coisa.
+##
+## Golpes de PULSO (multi-hit e canais) ficam de fora: o acerto deles sai do
+## relógio de pulsos, não da fase. Ter os dois caminhos ligados faria o mesmo
+## Golpe acertar duas vezes no mesmo Tique.
 func is_attack_active() -> bool:
 	if state != State.ATTACK:
 		return false
 	var move := current_move()
+	if move.has("pulse_every"):
+		return false
 	var windup := float(move["windup"])
 	return state_time > windup and state_time <= windup + float(move["active"])
 
@@ -174,8 +258,13 @@ func to_dict() -> Dictionary:
 		"attack_index": attack_index,
 		"attack_dir": attack_dir,
 		"buffered": int(buffered),
-		"combo_next": combo_next,
+		"combo_from": combo_from,
 		"combo_grace": combo_grace,
+		"combo_effect_used": combo_effect_used,
+		"brio": brio,
+		"dodge_window": dodge_window,
+		"channel_time": channel_time,
+		"channel_hits": channel_hits,
 		"afflictions": afflictions.duplicate(),
 		"ammo": ammo,
 		"blast_ammo": blast_ammo,
@@ -186,6 +275,22 @@ func to_dict() -> Dictionary:
 		"valor_time": valor_time,
 		"hook_target": hook_target,
 		"spin_tick": spin_tick,
+		"charge_time": charge_time,
+		"charge_locked": charge_locked,
+		"charge_kind": charge_kind,
+		"axe_out": axe_out,
+		"det_stacks": det_stacks,
+		"det_time": det_time,
+		"resolve_time": resolve_time,
+		"pike_ammo": pike_ammo,
+		"wound_buff_time": wound_buff_time,
+		"mag": mag,
+		"empowered_shots": empowered_shots,
+		"fire_cooldown": fire_cooldown,
+		"damage_dealt": damage_dealt,
+		"parts_broken": parts_broken,
+		"interrupts": interrupts,
+		"ready": ready,
 		"seq": last_input_seq,
 	}
 
@@ -207,6 +312,12 @@ func to_view_dict() -> Dictionary:
 		"attack_kind": attack_kind,
 		"attack_index": attack_index,
 		"attack_dir": attack_dir,
+		## Sem `axe_out` o remoto desenharia o machado na mão E o projétil.
+		"axe_out": axe_out,
+		## Aura de Determinação nos remotos: é um int, cabe no MTU.
+		"det_stacks": det_stacks,
+		## O lobby precisa do "pronto" de todo mundo, não só do dono.
+		"ready": ready,
 	}
 
 
@@ -234,8 +345,13 @@ func apply_dict(data: Dictionary) -> void:
 	attack_index = data.get("attack_index", attack_index)
 	attack_dir = data.get("attack_dir", attack_dir)
 	buffered = data.get("buffered", int(buffered)) as Buffered
-	combo_next = data.get("combo_next", combo_next)
+	combo_from = data.get("combo_from", combo_from)
 	combo_grace = data.get("combo_grace", combo_grace)
+	combo_effect_used = data.get("combo_effect_used", combo_effect_used)
+	brio = data.get("brio", brio)
+	dodge_window = data.get("dodge_window", dodge_window)
+	channel_time = data.get("channel_time", channel_time)
+	channel_hits = data.get("channel_hits", channel_hits)
 	afflictions = data.get("afflictions", afflictions)
 	ammo = data.get("ammo", ammo)
 	blast_ammo = data.get("blast_ammo", blast_ammo)
@@ -246,4 +362,20 @@ func apply_dict(data: Dictionary) -> void:
 	valor_time = data.get("valor_time", valor_time)
 	hook_target = data.get("hook_target", hook_target)
 	spin_tick = data.get("spin_tick", spin_tick)
+	charge_time = data.get("charge_time", charge_time)
+	charge_locked = data.get("charge_locked", charge_locked)
+	charge_kind = data.get("charge_kind", charge_kind)
+	axe_out = data.get("axe_out", axe_out)
+	det_stacks = data.get("det_stacks", det_stacks)
+	det_time = data.get("det_time", det_time)
+	resolve_time = data.get("resolve_time", resolve_time)
+	pike_ammo = data.get("pike_ammo", pike_ammo)
+	wound_buff_time = data.get("wound_buff_time", wound_buff_time)
+	mag = data.get("mag", mag)
+	empowered_shots = data.get("empowered_shots", empowered_shots)
+	fire_cooldown = data.get("fire_cooldown", fire_cooldown)
+	damage_dealt = data.get("damage_dealt", damage_dealt)
+	parts_broken = data.get("parts_broken", parts_broken)
+	interrupts = data.get("interrupts", interrupts)
+	ready = data.get("ready", ready)
 	last_input_seq = data.get("seq", last_input_seq)

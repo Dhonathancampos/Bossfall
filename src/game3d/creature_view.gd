@@ -2,14 +2,59 @@ class_name CreatureView
 extends Node3D
 
 ## O Behemoth em carne e osso: carrega o .glb da criatura, segue o estado do
-## Instantâneo com a animação certa, tinge pela variante elemental e esconde a
-## cauda decepada.
+## Instantâneo com a animação certa, tinge pela variante elemental e mostra no
+## CORPO o que a Sim diz das Partes — placa quebrada, membro decepado.
 ##
-## Componente de apresentação puro, AINDA NÃO integrado à Arena3D — a troca
-## da cápsula por isto é passo de integração do Gerente.
+## Componente de apresentação puro: nenhuma regra mora aqui. O que a Parte faz
+## é decisão da Sim; esta classe só escolhe qual malha fica visível.
+##
+## O contrato com `tools/models/*.py`: toda Parte que muda de cara ao quebrar
+## tem MALHA COM NOME PRÓPRIO no .glb. Quebrou aqui = o gerador do modelo
+## parou de exportar a malha com aquele nome; conserta-se no .py, não aqui.
 
 const SCENES: Dictionary = {
 	"gnasher": "res://assets/models/quadruped.glb",
+	"bastion": "res://assets/models/bastiao.glb",
+	## A Faiscaia ainda não existe em `src/sim/behemoths.gd` — o modelo e as
+	## animações já existem, e o dia em que a Mecânica criar o tipo ela nasce
+	## com corpo. Até lá esta entrada nunca é procurada.
+	"faiscaia": "res://assets/models/faiscaia.glb",
+}
+
+## Malhas por Parte, por tipo de Behemoth. Dois papéis possíveis:
+##
+## - `sever`: a malha SOME quando a Parte quebra sendo decepável (a cauda do
+##   Gnasher, o Ferrão e as Antenas da Faiscaia).
+## - `plate` + `raw`: a placa some e a carne/quartzo por baixo aparece. É a
+##   leitura do Bastião: de longe se vê QUAL setor já foi aberto.
+const PARTS: Dictionary = {
+	"gnasher": {
+		"tail": {"sever": "tail"},
+	},
+	"bastion": {
+		"tail": {"sever": "tail"},
+		"head": {"plate": "crest", "raw": "raw_head"},
+		"shell": {"plate": "shell", "raw": "raw_shell"},
+	},
+	"faiscaia": {
+		"stinger": {"sever": "stinger"},
+		"antennae": {"sever": "antenna"},
+		"plates": {"plate": "plates", "raw": "raw_plates"},
+	},
+}
+
+## Estações do Núcleo Errante da Faiscaia, na ordem do ciclo da ficha
+## (Ferrão → dorso traseiro → dorso dianteiro → Mandíbulas). Só a estação da
+## vez fica visível: localizar o núcleo num relance é a mecânica da luta.
+## Enquanto a Sim não serializar `core_station`, vale a estação 0.
+const CORE_STATIONS: Array[String] = ["core_tail", "core_back_a", "core_back_b", "core_head"]
+
+## Material do couro/casca por criatura: é o que a variante elemental tinge e
+## o que lampeja ao levar dano.
+const BODY_MATERIALS: Dictionary = {
+	"gnasher": "quad_moss",
+	"bastion": "bastion_hide",
+	"faiscaia": "faiscaia_quartz",
 }
 
 const LOOPING: Array[String] = ["idle", "walk"]
@@ -20,10 +65,19 @@ const ELEMENT_TINT: float = 0.45
 ## Velocidade (cm/s) acima da qual a criatura "anda".
 const WALK_SPEED_MIN: float = 15.0
 
+## Pulso do núcleo: 1 Hz normal, 2 Hz em Fúria (ficha da Faiscaia).
+const CORE_PULSE_HZ: float = 1.0
+const CORE_ENERGY: float = 1.8
+
 var _player: AnimationPlayer
 var _body_material: BaseMaterial3D
 var _base_color: Color = Color.WHITE
-var _tail_nodes: Array[Node3D] = []
+## Parte -> {papel -> [nós]}, montado do PARTS do tipo desta criatura.
+var _part_nodes: Dictionary = {}
+## Estação -> [nós] do Núcleo Errante, com material próprio para acender.
+var _core_nodes: Dictionary = {}
+var _core_materials: Array[BaseMaterial3D] = []
+var _core_time: float = 0.0
 var _current: String = ""
 var _roaring: bool = false
 var _last_pos: Vector2 = Vector2.ZERO
@@ -43,8 +97,9 @@ func setup(type_id: String, element: int) -> void:
 			if _player.has_animation(anim_name):
 				_player.get_animation(anim_name).loop_mode = Animation.LOOP_LINEAR
 
-	_collect_tail(model)
-	_claim_body_material(model)
+	_collect_parts(model, type_id)
+	_collect_core(model)
+	_claim_body_material(model, BODY_MATERIALS.get(type_id, "quad_moss"))
 
 	# A variante elemental tinge o couro de uma vez, no nascimento.
 	var kind := element as Elements.Element
@@ -58,7 +113,8 @@ func update_from(behemoth: Dictionary, delta: float) -> void:
 		return
 
 	_update_flash(behemoth)
-	_update_tail(behemoth)
+	_update_parts(behemoth)
+	_update_core(behemoth, delta)
 
 	var state := int(behemoth.get("state", 0))
 	var state_time := float(behemoth.get("state_time", 0.0))
@@ -130,26 +186,92 @@ func _update_flash(behemoth: Dictionary) -> void:
 		_body_material.emission_energy_multiplier = 0.7
 
 
-## A cauda decepada some do corpo — a Sim já tirou a rabada do repertório.
-func _update_tail(behemoth: Dictionary) -> void:
+## O corpo conta o estado das Partes: o membro decepado some, a placa quebrada
+## dá lugar à carne. A Sim já tirou o ataque correspondente do repertório —
+## aqui é só a cara disso.
+func _update_parts(behemoth: Dictionary) -> void:
+	if _part_nodes.is_empty():
+		return
 	for part in behemoth.get("parts", []):
-		if part.get("id", "") != "tail":
+		var slots: Dictionary = _part_nodes.get(part.get("id", ""), {})
+		if slots.is_empty():
 			continue
-		var severed: bool = part.get("broken", false) and part.get("severable", false)
-		for node in _tail_nodes:
+		var broken: bool = part.get("broken", false)
+		var severed: bool = broken and part.get("severable", false)
+		for node in slots.get("sever", []):
 			node.visible = not severed
+		for node in slots.get("plate", []):
+			node.visible = not broken
+		for node in slots.get("raw", []):
+			node.visible = broken
 
 
-func _collect_tail(node: Node) -> void:
-	if node is Node3D and String(node.name).begins_with("tail"):
-		_tail_nodes.append(node)
+func _collect_parts(model: Node, type_id: String) -> void:
+	var table: Dictionary = PARTS.get(type_id, {})
+	for part_id in table:
+		var slots: Dictionary = {}
+		for role in (table[part_id] as Dictionary):
+			var nodes := _named(model, String(table[part_id][role]))
+			slots[role] = nodes
+			# A camada de baixo nasce escondida: ela é a cara da QUEBRA.
+			if role == "raw":
+				for node in nodes:
+					node.visible = false
+		_part_nodes[part_id] = slots
+
+
+## O Núcleo Errante: só a estação da vez fica visível, pulsando. Material
+## próprio por nó, para o pulso não vazar para outra instância.
+func _update_core(behemoth: Dictionary, delta: float) -> void:
+	if _core_nodes.is_empty():
+		return
+	var station := clampi(int(behemoth.get("core_station", 0)), 0, CORE_STATIONS.size() - 1)
+	for index in CORE_STATIONS.size():
+		for node in _core_nodes.get(CORE_STATIONS[index], []):
+			node.visible = index == station
+	var rate := CORE_PULSE_HZ * (2.0 if bool(behemoth.get("enraged", false)) else 1.0)
+	_core_time += delta * rate
+	var pulse := 0.75 + 0.25 * sin(_core_time * TAU)
+	for material in _core_materials:
+		material.emission_energy_multiplier = CORE_ENERGY * pulse
+
+
+func _collect_core(model: Node) -> void:
+	for name in CORE_STATIONS:
+		var nodes := _named(model, name)
+		if nodes.is_empty():
+			continue
+		_core_nodes[name] = nodes
+		for node in nodes:
+			if not (node is MeshInstance3D):
+				continue
+			var mesh := node as MeshInstance3D
+			if mesh.mesh == null:
+				continue
+			for surface in range(mesh.mesh.get_surface_count()):
+				var mat := mesh.mesh.surface_get_material(surface)
+				if mat == null or not (mat is BaseMaterial3D):
+					continue
+				var copy := (mat as BaseMaterial3D).duplicate() as BaseMaterial3D
+				copy.emission_enabled = true
+				mesh.set_surface_override_material(surface, copy)
+				_core_materials.append(copy)
+
+
+## Nós cujo nome é `prefix` ou começa com ele — o importador glTF desambigua
+## nomes repetidos com sufixo (`tail_2`), então o prefixo é o contrato.
+func _named(node: Node, prefix: String) -> Array[Node3D]:
+	var found: Array[Node3D] = []
+	if node is Node3D and not (node is AnimationPlayer) and String(node.name).begins_with(prefix):
+		found.append(node as Node3D)
 	for child in node.get_children():
-		_collect_tail(child)
+		found.append_array(_named(child, prefix))
+	return found
 
 
-## Duplica o material do couro ("quad_moss") para esta instância, para tinta
-## e lampejo não vazarem para outro Behemoth no futuro.
-func _claim_body_material(model: Node) -> void:
+## Duplica o material do couro/casca para esta instância, para tinta e lampejo
+## não vazarem para outro Behemoth no futuro.
+func _claim_body_material(model: Node, material_name: String) -> void:
 	for mesh in _meshes(model):
 		if mesh.mesh == null:
 			continue
@@ -157,7 +279,7 @@ func _claim_body_material(model: Node) -> void:
 			var mat := mesh.mesh.surface_get_material(surface)
 			if mat == null or not (mat is BaseMaterial3D):
 				continue
-			if mat.resource_name != "quad_moss":
+			if mat.resource_name != material_name:
 				continue
 			if _body_material == null:
 				_body_material = (mat as BaseMaterial3D).duplicate() as BaseMaterial3D

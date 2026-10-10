@@ -6,16 +6,34 @@ extends Node3D
 ##
 ## Componente de apresentação da Arena3D. Nenhuma regra de jogo mora aqui:
 ## a animação segue a Sim, nunca o contrário.
+##
+## Esta classe NÃO fabrica animação. Houve uma fase em que ela reconstruía
+## caminhada e corrida por código, porque os ciclos gerados batiam o balanço
+## no eixo errado; `tools/models/common.py` passou a aceitar pose em eixos do
+## mundo e os clipes voltaram a ser a fonte. Clipe ruim se conserta no
+## gerador, não aqui.
 
 const HUNTER_SCENE: String = "res://assets/models/hunter.glb"
+
+## Modelo por arma. Machado, Lança e Repetidoras já têm .glb (papel Modelos)
+## mas ainda NÃO existem em `src/sim/weapons.gd`: o id nunca chega aqui até a
+## Mecânica criá-los. Ficam registrados para a arma nascer montada no dia em
+## que chegarem — e para o teste de assets provar que elas encaixam na mão.
 const WEAPON_SCENES: Dictionary = {
 	"sword": "res://assets/models/weapon_sword.glb",
 	"hammer": "res://assets/models/weapon_hammer.glb",
 	"blades": "res://assets/models/weapon_blades.glb",
+	"axe": "res://assets/models/weapon_axe.glb",
+	"pike": "res://assets/models/weapon_pike.glb",
+	"repeaters": "res://assets/models/weapon_repeaters.glb",
 }
 
-## Animações que repetem enquanto o estado durar.
-const LOOPING: Array[String] = ["idle", "walk", "sprint", "charge", "downed"]
+## Armas que são um PAR: o mesmo .glb vai nas duas mãos.
+const DUAL_WIELD: Array[String] = ["blades", "repeaters"]
+
+## Animações que repetem enquanto o estado durar. Duram o que a Sim quiser:
+## o Gancho acaba quando chega, a carga quando o jogador solta.
+const LOOPING: Array[String] = ["idle", "walk", "sprint", "charge", "downed", "hook"]
 
 ## Velocidade (cm/s do plano da Sim) que separa parado/andando/correndo.
 const WALK_SPEED_MIN: float = 12.0
@@ -41,11 +59,6 @@ func setup(weapon_id: String, player_color: Color) -> void:
 
 	_player = _find_player(model)
 	_skeleton = _find_skeleton(model)
-	if _player != null and _skeleton != null:
-		var library := _player.get_animation_library("").duplicate(true) as AnimationLibrary
-		_player.remove_animation_library("")
-		_player.add_animation_library("", library)
-		_build_locomotion()
 	if _player != null:
 		for anim_name in LOOPING:
 			if _player.has_animation(anim_name):
@@ -66,9 +79,7 @@ func update_from(hunter: Dictionary, _delta: float) -> void:
 
 	var velocity: Vector2 = hunter.get("velocity", Vector2.ZERO)
 	var speed := velocity.length()
-	# O corpo acompanha a caminhada; a mira continua independente na Sim.
-	rotation.y = GameWorld.to_yaw(velocity.angle()) - GameWorld.to_yaw(float(hunter.get("facing", 0.0))) \
-		if state == HunterState.State.FREE and speed >= WALK_SPEED_MIN else 0.0
+	rotation.y = _body_yaw(hunter, state, speed)
 
 	match state:
 		HunterState.State.DOWNED:
@@ -78,16 +89,17 @@ func update_from(hunter: Dictionary, _delta: float) -> void:
 		HunterState.State.DODGE:
 			_play("dodge", state_time)
 		HunterState.State.ATTACK:
-			var move := Weapons.move(_weapon_id, int(hunter.get("attack_kind", 0)) as Weapons.Kind, int(hunter.get("attack_index", 0)))
-			var anim := _attack_animation(hunter)
-			_play(anim, _attack_clip_time(anim, move, state_time))
-		# Estados das armas clássicas (revisão): sem isto, carga e gancho
-		# mostravam o Caçador parado em idle. SPECIAL_SPIN e RELOADING ainda
-		# caem no idle — animações próprias ficam com o papel Modelos.
+			# O clipe tem a duração exata do Golpe na Sim, fase por fase:
+			# o tempo do estado É o tempo do clipe, sem remapear nada.
+			_play(_attack_animation(hunter), state_time)
 		HunterState.State.CHARGING:
 			_play("charge")
 		HunterState.State.HOOK_PULL:
-			_play("dodge", state_time)
+			_play("hook")
+		HunterState.State.SPECIAL_SPIN:
+			_play("special_spin", state_time)
+		HunterState.State.RELOADING:
+			_play("reload", state_time)
 		_:
 			if speed >= SPRINT_SPEED_MIN:
 				_play("sprint")
@@ -97,27 +109,35 @@ func update_from(hunter: Dictionary, _delta: float) -> void:
 				_play("idle")
 
 
+## Para onde o corpo aponta. A mira da Sim é o nó pai; aqui só se desvia dela
+## quando o movimento manda: andar na diagonal e rolar para o lado.
+func _body_yaw(hunter: Dictionary, state: int, speed: float) -> float:
+	var facing := GameWorld.to_yaw(float(hunter.get("facing", 0.0)))
+	if state == HunterState.State.DODGE:
+		var dir: Vector2 = hunter.get("dodge_dir", Vector2.ZERO)
+		# O rolamento é um mergulho PARA A FRENTE no clipe: virar o corpo
+		# para a direção da esquiva é o que o torna legível de qualquer lado.
+		return GameWorld.to_yaw(dir.angle()) - facing if dir.length_squared() > 0.0001 else 0.0
+	if state == HunterState.State.FREE and speed >= WALK_SPEED_MIN:
+		var velocity: Vector2 = hunter.get("velocity", Vector2.ZERO)
+		return GameWorld.to_yaw(velocity.angle()) - facing
+	return 0.0
+
+
+## Cada arma tem o seu jogo de clipes, um por Golpe, com os mesmos índices da
+## tabela de `weapons.gd`: `sword_light_1`, `hammer_heavy_3`, `blades_light_4`.
+## O campo `animation` dos dados de Golpe é legado e não é mais lido — ele
+## existia para reaproveitar clipes da espada quando só havia um jogo.
 func _attack_animation(hunter: Dictionary) -> String:
-	if int(hunter.get("attack_kind", 0)) == int(Weapons.Kind.HEAVY):
-		return String(Weapons.move(_weapon_id, Weapons.Kind.HEAVY, int(hunter.get("attack_index", 0))).get("animation", "heavy"))
-	return "light_%d" % (int(hunter.get("attack_index", 0)) % 3 + 1)
-
-
-## Reutilização provisória dos clips da espada: alinha preparo/contato/recuperação,
-## não só a duração total (o segundo pesado usa o corte ascendente).
-func _attack_clip_time(anim: String, move: Dictionary, time: float) -> float:
-	var phases: Array = {"light_1": [0.12, 0.08, 0.22], "light_2": [0.11, 0.08, 0.24],
-		"light_3": [0.16, 0.14, 0.36], "heavy": [0.32, 0.10, 0.42]}[anim]
-	var elapsed := 0.0
-	var clip_elapsed := 0.0
-	var keys := ["windup", "active", "recovery"]
-	for i in 3:
-		var duration := float(move[keys[i]])
-		if time <= elapsed + duration:
-			return clip_elapsed + clampf((time - elapsed) / maxf(duration, 0.001), 0, 1) * float(phases[i])
-		elapsed += duration
-		clip_elapsed += float(phases[i])
-	return clip_elapsed
+	var kind := "heavy" if int(hunter.get("attack_kind", 0)) == int(Weapons.Kind.HEAVY) else "light"
+	var index := int(hunter.get("attack_index", 0)) + 1
+	var wanted := "%s_%s_%d" % [_weapon_id, kind, index]
+	if _player.has_animation(wanted):
+		return wanted
+	# Arma sem clipe próprio para este índice cai no jogo da espada, e em
+	# último caso no primeiro Golpe dela: nunca num nome inexistente.
+	var fallback := "%s_%s_%d" % [Weapons.SWORD, kind, index]
+	return fallback if _player.has_animation(fallback) else "sword_light_1"
 
 
 ## Toca sem recomeçar o que já está tocando; com `seek_to`, ressincroniza a
@@ -135,44 +155,8 @@ func _play(anim_name: String, seek_to: float = -1.0) -> void:
 		_player.pause()
 
 
-## O rig olha +X. O balanço original em X abria pernas para os lados.
-## Constrói ciclos no plano sagital, convertendo o eixo mundial para cada osso.
-func _build_locomotion() -> void:
-	var library := _player.get_animation_library("")
-	var skeleton_path := _player.get_node(_player.root_node).get_path_to(_skeleton)
-	for clip in ["walk", "sprint"]:
-		var running: bool = clip == "sprint"
-		var animation := Animation.new()
-		animation.length = 0.55 if running else 0.8
-		animation.loop_mode = Animation.LOOP_LINEAR
-		for bone in _skeleton.get_bone_count():
-			var bone_name := _skeleton.get_bone_name(bone)
-			var track := animation.add_track(Animation.TYPE_ROTATION_3D)
-			animation.track_set_path(track, NodePath(str(skeleton_path) + ":" + bone_name))
-			var rest := _skeleton.get_bone_rest(bone).basis.get_rotation_quaternion()
-			var axis := _skeleton.get_bone_global_rest(bone).basis.inverse() * Vector3(0, 0, 1)
-			for key in 17:
-				var phase := TAU * float(key) / 16.0
-				var side := 0.0 if "_r" in bone_name else PI
-				var angle := 0.0
-				if bone_name.begins_with("thigh"):
-					angle = sin(phase + side) * (40.0 if running else 24.0)
-				elif bone_name.begins_with("shin"):
-					angle = -maxf(0.0, sin(phase + side)) * (58.0 if running else 32.0)
-				elif bone_name.begins_with("upper_arm"):
-					angle = -sin(phase + side) * (28.0 if running else 16.0)
-				elif bone_name.begins_with("forearm"):
-					angle = 30.0 if running else 12.0
-				elif bone_name.begins_with("chest"):
-					angle = -8.0 if running else -2.0
-				animation.rotation_track_insert_key(track, animation.length * float(key) / 16.0, rest * Quaternion(axis.normalized(), deg_to_rad(angle)))
-		if library.has_animation(clip):
-			library.remove_animation(clip)
-		library.add_animation(clip, animation)
-
-
-## A arma vai num BoneAttachment3D da mão direita. As Lâminas são um par:
-## ganham uma segunda instância no antebraço esquerdo.
+## A arma vai num BoneAttachment3D da mão direita. As armas de DUAL_WIELD
+## (Lâminas, Repetidoras) ganham uma segunda instância na mão esquerda.
 func _attach_weapon(weapon_id: String) -> void:
 	if _skeleton == null or not WEAPON_SCENES.has(weapon_id):
 		return
@@ -181,10 +165,8 @@ func _attach_weapon(weapon_id: String) -> void:
 		return
 
 	_mount(packed, "hand_r")
-	if weapon_id == "blades":
-		# O rig atual não tem mão esquerda: a empunhadura fica na ponta
-		# do antebraço (0,27 m), não na origem do osso, junto ao cotovelo.
-		_mount(packed, "forearm_l", Vector3(0.0, 0.27, 0.0))
+	if weapon_id in DUAL_WIELD:
+		_mount(packed, "hand_l")
 
 
 func _mount(packed: PackedScene, bone: String, grip_offset: Vector3 = WEAPON_OFFSET) -> void:

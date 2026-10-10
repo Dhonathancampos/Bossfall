@@ -21,8 +21,9 @@ Convenções:
 Recursos de animação (todos documentados em detalhe junto de cada função):
 - **Easing por chave**: o 4º elemento de uma chave escolhe a curva de saída
   daquela chave (antecipação lenta, impacto seco, assentamento macio...).
-- **Translação em espaço de mundo**: `space="world"` deixa escrever o
-  deslocamento de raiz em metros do mundo, sem pensar no eixo do osso.
+- **Pose em eixos do mundo**: `space="world"` deixa escrever rotação e
+  deslocamento de raiz nos mesmos eixos para todo osso, sem descobrir no
+  olho qual eixo de cada osso inclina para a frente.
 - **Movimento secundário barato**: `follow` (defasagem amortecida para
   cachecol/cauda) e `settle` (passar do ponto e assentar no fim do golpe).
 - **Ciclos**: `cycle` gera um ciclo senoidal amostrado, para locomoção boa
@@ -34,7 +35,11 @@ import math
 import bpy
 from mathutils import Euler, Vector
 
-FPS = 30
+## 60, igual ao passo fixo da Sim (SimConfig.TICK_RATE). O exportador glTF
+## amostra as curvas nesta taxa, então a duração de um clipe só pode cair num
+## múltiplo de 1/FPS: com 60 o erro contra o número da Sim fica abaixo de
+## 8 ms, e o quadro de contato cai num Tique de verdade.
+FPS = 60
 
 
 # --- Cena --------------------------------------------------------------
@@ -49,8 +54,16 @@ def reset_scene() -> None:
 # --- Materiais ----------------------------------------------------------
 
 
-def material(name: str, hex_color: str, roughness: float = 0.9) -> bpy.types.Material:
-    """Cor chapada. Reusa se já existir, para o .glb ter um material por cor."""
+def material(name: str, hex_color: str, roughness: float = 0.9,
+             emission: str = None, emission_strength: float = 1.0) -> bpy.types.Material:
+    """Cor chapada. Reusa se já existir, para o .glb ter um material por cor.
+
+    `emission` ACENDE a peça: a cor viaja no glTF como emissão e a Godot a
+    importa como `emission` do material, que a apresentação liga e desliga
+    por instância — é assim que o Núcleo Errante da Faiscaia pulsa na estação
+    atual e fica apagado nas outras. Sem `emission`, nada muda para os
+    modelos existentes.
+    """
     existing = bpy.data.materials.get(name)
     if existing is not None:
         return existing
@@ -60,15 +73,29 @@ def material(name: str, hex_color: str, roughness: float = 0.9) -> bpy.types.Mat
     bsdf = mat.node_tree.nodes["Principled BSDF"]
     bsdf.inputs["Base Color"].default_value = _hex_to_rgba(hex_color)
     bsdf.inputs["Roughness"].default_value = roughness
+    if emission is not None:
+        bsdf.inputs["Emission Color"].default_value = _hex_to_rgba(emission)
+        bsdf.inputs["Emission Strength"].default_value = emission_strength
     return mat
 
 
 def _hex_to_rgba(hex_color: str):
+    """Hex de paleta (sRGB) para a cor LINEAR que o Blender/glTF guardam.
+
+    Até 09/10/2026 esta função dividia por 255 e pronto: o valor sRGB entrava
+    como se fosse linear, e todo modelo saía cerca de duas vezes mais claro e
+    menos saturado do que o hex escolhido — era por isso que os bichos
+    chegavam esbranquiçados nas capturas, e por isso tentar "escurecer o
+    material" não resolvia (a conta errada clareava de novo).
+
+    A conversão é a do padrão sRGB. Cores de modelos antigos não mudam de
+    código, mudam de APARÊNCIA: passam a ser a cor que o hex sempre disse.
+    """
     value = hex_color.lstrip("#")
-    r = int(value[0:2], 16) / 255.0
-    g = int(value[2:4], 16) / 255.0
-    b = int(value[4:6], 16) / 255.0
-    return (r, g, b, 1.0)
+    channels = [int(value[i:i + 2], 16) / 255.0 for i in (0, 2, 4)]
+    linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+              for c in channels]
+    return (linear[0], linear[1], linear[2], 1.0)
 
 
 # --- Peças de corpo ------------------------------------------------------
@@ -340,15 +367,26 @@ def animation(
       SAI desta chave rumo à próxima. Sem easing, vale "auto" (o
       comportamento do pipeline antigo), então modelos existentes não mudam.
 
-    `space` escolhe como ler a translação:
+    `space` escolhe em que eixos a pose é escrita:
 
-    - "bone" (padrão): no espaço local do osso, como o Blender guarda. O eixo
-      Y aponta ao longo do osso; para um osso em pé isso significa que "para
-      cima" é +Y e "para a frente" é +X. Confuso, mas é o legado.
-    - "world": em METROS DE MUNDO (x = frente do personagem, y = lado,
-      z = cima). A conversão para o espaço do osso usa a matriz de repouso.
-      É o que torna escrevível o deslocamento de raiz dentro do clipe — o pé
-      que pisa, a investida que avança o corpo, o salto do pisão.
+    - "bone" (padrão): no espaço local do osso, como o Blender guarda. Cada
+      osso tem eixos próprios, que mudam conforme a direção em que ele
+      aponta. É o legado: funciona, mas exige descobrir o eixo de cada osso
+      no olho. Modelos antigos continuam valendo.
+    - "world": EIXOS DO MUNDO, iguais para todo osso, com o personagem
+      olhando para +X:
+          rx = rolar para a esquerda (eixo X)
+          ry = inclinar a ponta do osso para a FRENTE (eixo Y)
+          rz = girar para a esquerda (eixo Z)
+      Translação em metros de mundo (x = frente, y = esquerda, z = cima).
+
+      Repare no sinal: um tronco (osso que aponta para cima) com ry positivo
+      se inclina para a frente; uma coxa (osso que aponta para baixo) com ry
+      positivo joga o PÉ para trás — é a mesma rotação rígida, vista das duas
+      pontas. Perna indo à frente é ry negativo.
+
+      Foi essa confusão de eixos que fez a apresentação reconstruir a
+      caminhada por código. Com "world" o clipe gerado volta a ser a fonte.
 
     A duração do clipe é `seconds`, mesmo que a última chave venha antes: é o
     que faz a animação do Golpe casar exatamente com os números da Sim.
@@ -362,34 +400,47 @@ def animation(
     for bone_name, keys in poses.items():
         pose_bone = rig.pose.bones[bone_name]
         pose_bone.rotation_mode = "XYZ"
-        to_bone = None
+        basis = None
         if space == "world":
-            to_bone = rig.data.bones[bone_name].matrix_local.to_3x3().inverted()
+            basis = rig.data.bones[bone_name].matrix_local.to_3x3()
         frame_easing = {}
+        previous = None
         for key in keys:
             time = key[0]
             degrees = key[1]
             offset = key[2] if len(key) > 2 and key[2] is not None else None
             ease = key[3] if len(key) > 3 and key[3] else "auto"
-            frame = 1 + int(round(time * FPS))
+            frame = int(round(time * FPS))
             frame_easing[frame] = ease
-            pose_bone.rotation_euler = Euler(
+            euler = Euler(
                 (math.radians(degrees[0]), math.radians(degrees[1]), math.radians(degrees[2])),
                 "XYZ",
             )
+            if basis is not None:
+                # R_osso = M⁻¹ · R_mundo · M. O `previous` mantém a volta
+                # contínua: sem ele um giro de 360° viraria zero ao converter.
+                local = basis.inverted() @ euler.to_matrix() @ basis
+                euler = local.to_euler("XYZ", previous) if previous is not None \
+                    else local.to_euler("XYZ")
+                previous = euler
+            pose_bone.rotation_euler = euler
             pose_bone.keyframe_insert("rotation_euler", frame=frame)
             if offset is not None:
                 vector = Vector(offset)
-                pose_bone.location = to_bone @ vector if to_bone is not None else vector
+                pose_bone.location = basis.inverted() @ vector if basis is not None else vector
                 pose_bone.keyframe_insert("location", frame=frame)
         _apply_easing(action, pose_bone, frame_easing)
 
     # O fim da trilha marca a duração exata, mesmo que a última chave venha
     # antes — é o que deixa a animação do Golpe casar com os números da Sim.
-    end_frame = 1 + int(round(seconds * FPS))
+    #
+    # Tempo zero é o QUADRO ZERO, não o quadro 1. O exportador glTF conta a
+    # duração a partir do quadro 0, então começar no 1 somava um quadro à
+    # duração de todo clipe — um Golpe de 0,43 s chegava à Godot com 0,45 s.
+    end_frame = int(round(seconds * FPS))
     track = rig.animation_data.nla_tracks.new()
     track.name = name
-    strip = track.strips.new(name, 1, action)
+    strip = track.strips.new(name, 0, action)
     strip.action_frame_end = max(float(end_frame), strip.action_frame_end)
     rig.animation_data.action = None
 
@@ -440,6 +491,11 @@ def follow(keys: list, delay: float, damping: float = 0.55,
     segundos e reduzidas a `damping` do ângulo — o jeito mais barato de ter
     movimento secundário sem simulação nenhuma. `limit` corta no fim do
     clipe (a última chave é reposicionada ali, não descartada).
+
+    `damping` NEGATIVO é o caso do osso FILHO (cachecol preso ao peito, ponta
+    da cauda presa à base): como ele já herda o giro do pai, o que falta é
+    ele ficar para trás — uma cópia invertida e amortecida do pai é
+    exatamente o arrasto que se vê.
 
     A primeira chave é o repouso no instante original, para a peça começar
     parada e só então ser arrastada.

@@ -361,15 +361,13 @@ static func _finish_attack(behemoth: BehemothState, attack: Dictionary) -> void:
 ## Só funciona se o ataque declara `interruptible` nos dados, dentro da janela
 ## e acima do limiar. Devolve true quando o boop aconteceu.
 static func try_interrupt(behemoth: BehemothState, impact_stagger: float, events: Array) -> bool:
-	if behemoth.state != BehemothState.State.WINDUP:
+	# Fonte ÚNICA da janela: a mesma função que o Instantâneo publica como
+	# `interrupt_window` para o HUD e a tela "Aprenda". A janela que a
+	# apresentação avisa é literalmente a janela que resolve o boop.
+	if not behemoth.is_interruptible_now():
 		return false
 	var attack := behemoth.current_attack()
-	var window: Dictionary = attack.get("interruptible", {})
-	if window.is_empty():
-		return false
-	if behemoth.state_time > float(window.get("until", 0.0)):
-		return false
-	if impact_stagger < float(window.get("threshold", 1.0e9)):
+	if impact_stagger < behemoth.interrupt_threshold():
 		return false
 
 	events.append({

@@ -32,6 +32,11 @@ var special: bool = false
 ## enquanto `heavy_held` for verdadeiro.
 var heavy_held: bool = false
 
+## O botão leve continua segurado (contínuo, como `heavy_held`). É o que
+## sustenta o tiro contínuo das Repetidoras, a carga leve do Machado e as
+## transições `light_hold` do grafo de combo.
+var light_held: bool = false
+
 ## Pedido de recarga do Martelo (tecla R). Um Tique só, como a Esquiva.
 var reload: bool = false
 
@@ -51,7 +56,8 @@ static func make(
 	is_heavy: bool = false,
 	is_special: bool = false,
 	is_heavy_held: bool = false,
-	is_reload: bool = false
+	is_reload: bool = false,
+	is_light_held: bool = false
 ) -> HunterInput:
 	var input := HunterInput.new()
 	input.move = move_dir
@@ -64,6 +70,7 @@ static func make(
 	input.special = is_special
 	input.heavy_held = is_heavy_held
 	input.reload = is_reload
+	input.light_held = is_light_held
 	return input
 
 
@@ -72,6 +79,7 @@ func to_dict() -> Dictionary:
 		"move": move, "aim": aim, "seq": seq,
 		"sprint": sprint, "dodge": dodge, "light": light, "heavy": heavy,
 		"special": special, "held": heavy_held, "reload": reload,
+		"lheld": light_held,
 	}
 
 
@@ -86,5 +94,6 @@ static func from_dict(data: Dictionary) -> HunterInput:
 		data.get("heavy", false),
 		data.get("special", false),
 		data.get("held", false),
-		data.get("reload", false)
+		data.get("reload", false),
+		data.get("lheld", false)
 	)

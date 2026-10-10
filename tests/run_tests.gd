@@ -22,6 +22,12 @@ const SUITES: Array[String] = [
 	"res://tests/test_sim_elements.gd",
 	"res://tests/test_sim_weapons2.gd",
 	"res://tests/test_sim_rework.gd",
+	"res://tests/test_sim_combos.gd",
+	"res://tests/test_sim_axe.gd",
+	"res://tests/test_sim_pike.gd",
+	"res://tests/test_sim_repeaters.gd",
+	"res://tests/test_sim_interrupt.gd",
+	"res://tests/test_sim_phase.gd",
 	"res://tests/test_assets.gd",
 ]
 

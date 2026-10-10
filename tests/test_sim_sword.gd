@@ -54,6 +54,16 @@ func _ticks(seconds: float) -> int:
 func _first_light() -> Dictionary:
 	return Weapons.move(Weapons.SWORD, Weapons.Kind.LIGHT, 0)
 
+## Em que NÓ do grafo de combo o Golpe atual está. `attack_kind`+`attack_index`
+## continuam sendo a identidade replicada; o nome do nó é derivado deles.
+func _node(sim: Sim) -> String:
+	var hunter := _hunter(sim)
+	return Weapons.node_name(
+		Weapons.SWORD,
+		int(hunter["attack_kind"]) as Weapons.Kind,
+		int(hunter["attack_index"])
+	)
+
 
 ## Fases do Golpe ----------------------------------------------------------
 
@@ -133,7 +143,14 @@ func test_buffered_heavy_chains_without_moving(t: TestCase) -> void:
 	t.check_eq(_hunter(sim)["pos"], before, "combo não desloca")
 
 
-func test_all_ordinary_weapon_strikes_are_stationary(t: TestCase) -> void:
+## REESCRITO no ticket 14 (era `test_all_ordinary_weapon_strikes_are_stationary`).
+##
+## O grafo trouxe nós de mobilidade de propósito — investida de Brio, salto
+## demolidor, estocada em corrida, salto de recuo. A regra que o teste antigo
+## protegia continua de pé e agora é cobrada pelo DADO, não por suposição:
+## nenhum Golpe avança por conta própria; quem desloca declara `lunge`, e
+## desloca exatamente o que declarou.
+func test_strikes_move_only_by_declared_lunge(t: TestCase) -> void:
 	for weapon in Weapons.ids():
 		for kind in [Weapons.Kind.LIGHT, Weapons.Kind.HEAVY]:
 			for index in Weapons.moves(weapon, kind).size():
@@ -141,12 +158,23 @@ func test_all_ordinary_weapon_strikes_are_stationary(t: TestCase) -> void:
 				hunter.weapon_id = weapon
 				hunter.attack_kind = kind
 				hunter.attack_index = index
+				hunter.attack_dir = Vector2.RIGHT
 				hunter.state = HunterState.State.ATTACK
-				if hunter.current_move().get("hook", false):
+				var move := hunter.current_move()
+				# Gancho, tiro e Rolinho não são Golpes: têm regras próprias.
+				if move.get("hook", false) or move.get("shot", false) or move.get("tumble", false):
 					continue
-				for tick in _ticks(Weapons.duration(hunter.current_move())) + 2:
+				for tick in _ticks(Weapons.duration(move)) + 2:
 					HunterStep.step(hunter, HunterInput.new(), SimConfig.TICK_DELTA)
-				t.check_eq(hunter.pos, Vector2.ZERO, "%s golpe %s/%s estacionário" % [weapon, kind, index])
+				t.check_approx(
+					hunter.pos.x, float(move.get("lunge", 0.0)),
+					"%s golpe %s/%s desloca só o `lunge` declarado" % [weapon, kind, index],
+					1.0
+				)
+				t.check_approx(
+					hunter.pos.y, 0.0,
+					"%s golpe %s/%s não desvia de lado" % [weapon, kind, index]
+				)
 
 
 ## Combo -------------------------------------------------------------------
@@ -187,18 +215,31 @@ func test_waiting_too_long_restarts_the_combo(t: TestCase) -> void:
 	t.check_eq(_hunter(sim)["attack_index"], 0, "perder a Janela volta a sequência para o primeiro Golpe")
 
 
-func test_a_heavy_attack_restarts_the_light_sequence(t: TestCase) -> void:
+## REESCRITO no ticket 14 (era `test_a_heavy_attack_restarts_the_light_sequence`).
+##
+## A regra "pesado REINICIA os leves" DEIXOU DE EXISTIR — é exatamente o ponto
+## do ticket. Alternar leve e pesado agora é um DESVIO: uma aresta do grafo,
+## que leva a um nó diferente em vez de voltar ao começo. O reset continua
+## existindo, mas só pelo caminho honesto: perder a Janela de Combo
+## (coberto por `test_waiting_too_long_restarts_the_combo`).
+func test_a_heavy_attack_diverts_the_chain_instead_of_restarting_it(t: TestCase) -> void:
 	var sim := _sim_next_to_target()
 	_hold(sim, _press(), 1)
+	t.check_eq(_node(sim), "l1", "o primeiro leve é o primeiro nó")
 	_hold(sim, _idle(), _ticks(Weapons.duration(_first_light())) + 1)
 
-	# Pesado logo em seguida, ainda dentro da Janela.
+	# Pesado logo em seguida, ainda dentro da Janela: desvia para a cadeia
+	# pesada, não reinicia nada.
 	_hold(sim, _press(false, true), 1)
 	t.check_eq(int(_hunter(sim)["attack_kind"]), int(Weapons.Kind.HEAVY), "o botão direito dá o Golpe pesado")
+	t.check_eq(_node(sim), "h1", "L,H desvia para o pesado")
 
-	_hold(sim, _idle(), _ticks(Weapons.duration(Weapons.move(Weapons.SWORD, Weapons.Kind.HEAVY, 0))) + 1)
+	_hold(sim, _idle(), _ticks(Weapons.duration(_hunter_move(sim))) + 1)
 	_hold(sim, _press(), 1)
-	t.check_eq(_hunter(sim)["attack_index"], 0, "depois do pesado, a sequência leve recomeça")
+	t.check_eq(
+		_node(sim), "hl",
+		"e o leve seguinte é o Corte de Ligação — não a volta ao primeiro leve"
+	)
 
 
 ## Acerto ------------------------------------------------------------------

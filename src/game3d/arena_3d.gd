@@ -207,11 +207,15 @@ func _process(delta: float) -> void:
 	_update_camera()
 
 	var forward := -_camera.global_transform.basis.z
+	# Os dois botões seguram: o direito arma Rajada e carga, o esquerdo
+	# sustenta o tiro contínuo das Repetidoras e as transições de segurar do
+	# grafo de combo.
 	_net.set_local_input(
 		_read_move(),
 		GameWorld.aim_from_forward(forward),
 		Input.is_key_pressed(KEY_SHIFT),
-		Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)
+		Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT),
+		Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
 	)
 
 	_sync_hunters(delta)

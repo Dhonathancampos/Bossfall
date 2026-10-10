@@ -19,6 +19,10 @@ const PART_COLOR := Color("b9a06a")
 const PART_BROKEN_COLOR := Color("6e6253")
 const ENRAGE_COLOR := Color("ff8a5c")
 
+## O aviso de interrupção pisca em verde: é a única cor do HUD que significa
+## "faça alguma coisa AGORA", e precisa ser lida no canto do olho.
+const INTERRUPT_COLOR := Color("8de08a")
+
 const BAR_WIDTH: float = 320.0
 const BAR_HEIGHT: float = 12.0
 
@@ -26,6 +30,9 @@ var _net: NetGame
 var _canvas: Control
 var _status: Label
 var _font: Font
+
+## Relógio só da piscada do aviso de interrupção. Nada da Sim depende dele.
+var _blink: float = 0.0
 
 
 func setup(net: NetGame) -> void:
@@ -48,9 +55,10 @@ func _ready() -> void:
 	add_child(_canvas)
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if _net == null or not _net.is_running():
 		return
+	_blink += delta
 	_status.text = _status_text()
 	_canvas.queue_redraw()
 
@@ -80,6 +88,49 @@ func _draw_hud() -> void:
 	_weapon_resources(mine, origin)
 	_afflictions(mine, origin, viewport)
 	_behemoth_bar(viewport)
+	_interrupt_banner(viewport)
+
+
+## O aviso que fecha o ciclo com o Aprenda: lá o jogador leu QUAIS ataques dão
+## para interromper; aqui ele vê QUANDO. Sem isto a interrupção só é
+## descoberta por acidente.
+func _interrupt_banner(viewport: Vector2) -> void:
+	var notice := _interrupt_notice(_net.view_behemoth())
+	if notice.is_empty():
+		return
+
+	# Piscada lenta: chama o olho sem virar estroboscópio no meio da luta.
+	var pulse := 0.65 + 0.35 * sin(_blink * 7.0)
+	var color := INTERRUPT_COLOR
+	color.a = pulse
+
+	var width := _font.get_string_size(notice, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 24).x
+	var at := Vector2((viewport.x - width) * 0.5, viewport.y * 0.22)
+	_canvas.draw_rect(
+		Rect2(at - Vector2(12.0, 22.0), Vector2(width + 24.0, 32.0)), BAR_BACK
+	)
+	_canvas.draw_string(_font, at, notice, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 24, color)
+
+
+## Verdadeiro enquanto o Behemoth está num trecho interrompível.
+##
+## A janela e o limiar vêm prontos do Instantâneo, da MESMA função que resolve
+## o boop na Sim (`BehemothState.is_interruptible_now()`), então o aviso nunca
+## pode contradizer a regra — há teste na Sim cobrando essa igualdade.
+##
+## A dedução local que existia aqui saiu quando o campo chegou. A tela
+## "Aprenda" continua lendo `interruptible` dos dados: lá é para ENSINAR quais
+## ataques aceitam boop; aqui é para AVISAR que a janela está aberta agora.
+func _interrupt_notice(behemoth: Dictionary) -> String:
+	if behemoth.is_empty() or not bool(behemoth.get("interrupt_window", false)):
+		return ""
+	var attack := Behemoths.attack(
+		behemoth.get("type", Behemoths.GNASHER), behemoth.get("attack", "")
+	)
+	return "JANELA DE INTERRUPÇÃO — %s · impacto %d+" % [
+		String(attack.get("name", "")),
+		int(float(behemoth.get("interrupt_threshold", 0.0)))
+	]
 
 
 ## Recursos da arma, ao lado das barras: as 4 munições do Martelo como

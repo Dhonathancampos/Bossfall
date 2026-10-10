@@ -183,10 +183,20 @@ const _DATA: Dictionary = {
 		"enrage_damage": 1.3,
 		"enrage_cooldown": 0.7,
 
+		## CRITÉRIO DE INTERRUPÇÃO DO BASTIÃO.
+		## Interrompível = ataque LENTO E COMPROMETIDO: Preparo de 0,80 s para
+		## cima, ou que arranca o corpo para a frente. O que ele faz COLADO
+		## (Cabeçada 0,66 s, Maçada 0,60 s) NÃO é — perto dele a resposta é a
+		## esquiva, não o boop; senão a arma de Impacto apagaria o repertório
+		## de curta distância dele e a luta viraria um só botão.
+		## Pelo critério: Rolamento (0,90 + investida) e Tremor (0,85) têm
+		## janela; Cabeçada e Maçada não. Limiar 110 — ele é mais duro de
+		## boopar que o Gnasher (90). Provisório, sem telemetria.
 		"attacks": [
 			{
 				"id": "headbutt",
 				"name": "Cabeçada",
+				## Rápida e colada: SEM janela de boop, de propósito.
 				"windup": 0.66, "active": 0.16, "recovery": 0.70,
 				"cooldown": 2.2,
 				"min_range": 0.0, "max_range": 220.0,
@@ -215,6 +225,7 @@ const _DATA: Dictionary = {
 			{
 				"id": "mace",
 				"name": "Maçada",
+				## Também colada e curta: fora do critério de boop.
 				"windup": 0.60, "active": 0.20, "recovery": 0.75,
 				"cooldown": 5.0,
 				"min_range": 0.0, "max_range": 255.0,

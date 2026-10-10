@@ -123,6 +123,15 @@ static func spawn(
 			## Zona de acerto no plano (hurtbox da Parte); vazio = setor.
 			"zone": part.get("zone", {}),
 			"broken": false,
+			## Ferimento (Lança de Guerra): o acúmulo de Perfuração, se a
+			## Parte está Ferida agora e por quanto tempo ainda. Replicam de
+			## graça — `to_dict` já manda `parts.duplicate(true)`.
+			"wound": 0.0,
+			"wounded": false,
+			"wound_time": 0.0,
+			## Quanto dano cada Caçador já tirou DESTA ferida aberta. Quem
+			## chega ao alvo leva o buff pessoal. {id do Caçador -> float}
+			"wound_claim": {},
 		})
 
 	# Todo ataque começa recarregando, com tempos diferentes, para que o
@@ -183,4 +192,29 @@ func to_dict() -> Dictionary:
 		"stagger": stagger,
 		"stagger_threshold": stagger_threshold,
 		"parts": parts.duplicate(true),
+		## A janela de INTERRUPÇÃO aberta agora: é com isto que o HUD e a tela
+		## "Aprenda" conseguem AVISAR que o boop cabe aqui. Sem este campo a
+		## apresentação teria que reimplementar a regra lendo os dados.
+		"interrupt_window": is_interruptible_now(),
+		"interrupt_threshold": interrupt_threshold(),
 	}
+
+
+## Verdadeiro enquanto o ataque em Preparo pode ser cancelado por um impacto
+## de Atordoamento forte. Fonte única da regra: quem desenha e quem resolve o
+## boop leem a MESMA função.
+func is_interruptible_now() -> bool:
+	if state != State.WINDUP or attack_id.is_empty():
+		return false
+	var window: Dictionary = current_attack().get("interruptible", {})
+	if window.is_empty():
+		return false
+	return state_time <= float(window.get("until", 0.0))
+
+
+## Quanto Atordoamento o impacto precisa gerar para interromper agora.
+## Zero quando não há janela aberta.
+func interrupt_threshold() -> float:
+	if not is_interruptible_now():
+		return 0.0
+	return float(current_attack().get("interruptible", {}).get("threshold", 0.0))
